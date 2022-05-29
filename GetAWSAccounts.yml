@@ -1,0 +1,28 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  SecurityToolsAccountId:
+    Type: Number
+    Description: Account id of the security tools account.
+Resources:
+  GetAWSAccountsRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: GetAWSAccountsRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS:
+                - !Sub "arn:aws:iam::${SecurityToolsAccountId}:root"
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: GetAWSAccountsPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - organizations:ListAccounts
+                Resource: "*"

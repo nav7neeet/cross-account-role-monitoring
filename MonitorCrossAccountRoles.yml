@@ -1,0 +1,233 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  ManagementAccountId:
+    Type: Number
+    Description: Account id of management account.
+  ManagementAccountRole:
+    Type: String
+    Description: Name of the role which lambda function assumes to get all AWS account list.
+    AllowedPattern: "[a-zA-Z0-9_-]+"
+    Default: GetAWSAccountsRole
+  SNSTopicName:
+    Type: String
+    Description: Name of the SNS topic.
+    AllowedPattern: "[a-zA-Z0-9_-]+"
+    Default: MonitorCrossAccountRolesTopic
+  EmailList:
+    Type: String
+    Description: Email to notify.
+    AllowedPattern: "[a-zA-Z0-9]+@[a-zA-Z0-9]+\\.[a-zA-Z]+"
+    Default: nav7neeet@gmail.com
+
+Resources:
+  MonitorCrossAccountRolesTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      Subscription:
+        - Endpoint: !Ref EmailList
+          Protocol: email
+      TopicName: !Sub "${SNSTopicName}"
+
+  MonitorCrossAccountRolesRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: MonitorCrossAccountRolesRole
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: lambda-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: logs:CreateLogGroup
+                Resource: arn:aws:logs:us-east-1:*:*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource:
+                  - arn:aws:logs:us-east-1:*:log-group:*:*
+              - Effect: Allow
+                Action: sns:Publish
+                Resource: "*"
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource: !Sub "arn:aws:iam::${ManagementAccountId}:role/${ManagementAccountRole}"
+
+  MonitorCrossAccountRolesFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: MonitorCrossAccountRolesFunction
+      Description: Lambda function to monitor cross account roles.
+      Handler: index.lambda_handler
+      Runtime: python3.9
+      Role: !GetAtt MonitorCrossAccountRolesRole.Arn
+      Environment:
+        Variables:
+          ManagementAccountId: !Sub ${ManagementAccountId}
+          ManagementAccountRole: !Sub ${ManagementAccountRole}
+          TopicName: !Sub "${SNSTopicName}"
+          SecurityToolsAccountId: !Sub ${AWS::AccountId}
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import logging
+          import os
+
+          ManagementAccountId = os.environ["ManagementAccountId"]
+          ManagementAccountRole = os.environ["ManagementAccountRole"]
+          TopicName = os.environ["TopicName"]
+          SecurityToolsAccountId=os.environ["SecurityToolsAccountId"]
+          topic_arn=f"arn:aws:sns:us-east-1:{SecurityToolsAccountId}:{TopicName}"
+          ROLE_SESSION_NAME = "MonitorCrossAccountRolesSession"
+
+          logger = logging.getLogger()
+          logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+          def get_role_details(request_parameters):
+              role = {}
+              role["name"] = request_parameters["roleName"]
+
+              if "assumeRolePolicyDocument" in request_parameters:
+                  assume_role_policy_document=request_parameters["assumeRolePolicyDocument"]
+              if "policyDocument" in request_parameters:
+                  assume_role_policy_document=request_parameters["policyDocument"]
+                  
+              assume_role_policy_document_dict=json.loads(assume_role_policy_document)
+              statements=assume_role_policy_document_dict["Statement"]
+              
+              X_access = False
+              principal_list = []
+              for statement in statements:
+                  principal = statement["Principal"]
+                  if "AWS" in principal:
+                      X_access = True
+                      principal_list.append(principal["AWS"])
+                  if "Federated" in principal:
+                      X_access = True
+                      principal_list.append(principal["Federated"])
+
+              if X_access:
+                  X_account_ids=[]
+                  for item in principal_list:
+                      if ":" in item:
+                          X_account_ids.append(item.split(":")[4])
+                      else:
+                          X_account_ids.append(item)
+                  
+                  role["X_account_ids"] = X_account_ids
+                  return role
+              
+              
+          def get_client(role_arn, service_name):
+              sts_client = boto3.client("sts")
+              response = sts_client.assume_role(
+                  RoleArn=role_arn, RoleSessionName=ROLE_SESSION_NAME
+              )
+              temp_creds = response["Credentials"]
+
+              client = boto3.client(
+                  service_name,
+                  aws_access_key_id=temp_creds["AccessKeyId"],
+                  aws_secret_access_key=temp_creds["SecretAccessKey"],
+                  aws_session_token=temp_creds["SessionToken"],
+              )
+              return client
+
+
+          def get_aws_accounts(organizations):
+              aws_accounts = []
+              paginator = organizations.get_paginator("list_accounts")
+              response_iterator = paginator.paginate()
+              
+              for response in response_iterator:
+                  for account in response["Accounts"]:
+                      aws_accounts.append(account["Id"])
+              return aws_accounts
+
+
+          def send_sns_notification(role_name, event_account_id, internal_ids, external_ids):
+              message1=''
+              message2=''
+              if internal_ids:
+                message1=f"Internal Dish AWS accounts: {internal_ids}"
+              if external_ids:
+                message2=f"External THIRD-PARTY AWS accounts: {external_ids}"
+              
+              message=f"""
+              #####
+              Cross account access was granted through role {role_name} in  account: {event_account_id} to the following AWS account(s) -
+              
+              {message1}
+              
+              {message2}
+              #####
+              """
+              client = boto3.client("sns")
+              response = client.publish(
+                  TopicArn=topic_arn,
+                  Message=message,
+                  Subject="Monitor Cross Account Roles",
+              )
+
+
+          def lambda_handler(event, context):
+              try:
+                  role_arn=f'arn:aws:iam::{ManagementAccountId}:role/{ManagementAccountRole}'
+                  
+                  if "errorCode" not in event["detail"]:
+                      request_parameters=event["detail"]["requestParameters"]
+                      event_account_id=event["account"]
+                      role=get_role_details(request_parameters)
+                      client = get_client(role_arn, "organizations")
+                      aws_accounts=get_aws_accounts(client)
+              
+                      internal_ids=[]
+                      external_ids=[]
+                      for id in role["X_account_ids"]:
+                          if id in aws_accounts:
+                              internal_ids.append(id)
+                          else:
+                              external_ids.append(id)
+                      
+                      send_sns_notification(role["name"], event_account_id,internal_ids, external_ids)
+              
+              except Exception as exception:
+                  logger.error("****** An error occured ****** \n" + str(exception))
+
+  MonitorCrossAccountRolesRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: MonitorCrossAccountRolesRule
+      Description: EventBridge rule to capture IAM events for create & update roles.
+      State: ENABLED
+      EventPattern:
+        source:
+          - aws.iam
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventSource:
+            - iam.amazonaws.com
+          eventName:
+            - CreateRole
+            - UpdateAssumeRolePolicy
+      Targets:
+        - Arn: !GetAtt MonitorCrossAccountRolesFunction.Arn
+          Id: MonitorCrossAccountRolesRule
+
+  MonitorCrossAccountRolesPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref MonitorCrossAccountRolesFunction
+      Action: lambda:InvokeFunction
+      Principal: "events.amazonaws.com"
+      SourceArn: !GetAtt MonitorCrossAccountRolesRule.Arn

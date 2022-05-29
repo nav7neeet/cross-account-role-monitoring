@@ -1,0 +1,51 @@
+AWSTemplateFormatVersion: 2010-09-09
+Parameters:
+  SecurityToolsAccountId:
+    Type: Number
+    Description: Account id of the Security Tools account.
+Resources:
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgePolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource:
+                  - !Sub  "arn:aws:events:us-east-1:${SecurityToolsAccountId}:event-bus/default"
+      Description: Role to allow Event Bridge to send IAM events to Event Bus in Security Tools account
+      Path: /
+      RoleName: EventBridgeRole
+
+  EventBridgeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Rule to send IAM events to Event Bus in Security Tools account
+      EventPattern:
+        source:
+          - aws.iam
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventSource:
+            - iam.amazonaws.com
+          eventName:
+            - CreateRole
+            - UpdateAssumeRolePolicy
+      Name: EventBridgeRule
+      State: ENABLED
+      Targets:
+        - Arn: !Sub "arn:aws:events:us-east-1:${SecurityToolsAccountId}:event-bus/default"
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          Id: id
