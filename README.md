@@ -12,11 +12,17 @@ The lambda function analyses the trust realationship (assume role policy documen
 
 
 **How to deploy?**<br>
-Create an IAM role in the management account to get the list of AWS accounts present in the organization. Lambda function assumes this role get the AWS account list.
+> Management Account<br>
+Deploy the CloudFormation template GetAWSAccounts.yml to create an IAM role in the management account to get the list of AWS accounts present in the organization. Lambda function assumes this role from the securty tools account to get the AWS accounts list.
 
-Create an Event Bridge rule in all the AWS accounts present in the organization to send specific IAM events (CreateRole, UpdateAssumeRolePolicy) to the default Event Bus in Security Tools account.
+> All AWS Accounts<br>
+Deploy the CloudFormation template EventBridgeRule.yml to create an Event Bridge rule in all the AWS accounts present in the organization to send specific IAM events (CreateRole, UpdateAssumeRolePolicy) to the default Event Bus in Security Tools account.
 
-Create an Event Bridge rule under default Event Bus in the Security Tools account to send the CreateRole, UpdateAssumeRolePolicy events to Lambda function for processing.
+> Security Tools Account<br>
+Deploy the CloudFormation template MonitorCrossAccountRoles.yml to create<br>
+	• Lambda function<br>
+	• Event Bridge rule under default Event Bus send the CreateRole, UpdateAssumeRolePolicy events to Lambda function for processing <br>
+	• SNS topic to send notifications to
 
 
 **How to test?**<br>
