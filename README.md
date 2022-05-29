@@ -1,4 +1,4 @@
-# cross-account-role-monitoring
+# Cross Account Role Monitoring
 
 **Description**<br>
 This solution sends an alert notification when cross account access is granted through an IAM role. When a new role is created (event name: CreateRole) or the trust relationship of an existing IAM role is updated (event name: UpdateAssumeRolePolicy) an Amazon Event Bridge rule delivers those specific IAM events to a default event bus in Security Tools account. The default event bus delivers the event to the matching rule which then sends the event object to lambda function for processing. 
