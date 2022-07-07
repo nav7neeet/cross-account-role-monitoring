@@ -158,7 +158,7 @@ Resources:
               message1=''
               message2=''
               if internal_ids:
-                message1=f"Internal Dish AWS accounts: {internal_ids}"
+                message1=f"Internal AWS accounts: {internal_ids}"
               if external_ids:
                 message2=f"External THIRD-PARTY AWS accounts: {external_ids}"
               
